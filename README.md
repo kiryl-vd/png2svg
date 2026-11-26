@@ -561,11 +561,17 @@ not publish releases. The crate is not published to crates.io.
 7. The merge starts **Publish release** again, this time to build and publish
    the requested version from the exact merged commit.
 
-The workflow accepts the current untagged version for a first release or a
-retry, and a higher version for later releases. An unchanged version does not
-need an empty PR and can be published directly from checked `main`.
-It rejects lower versions, leading zeros, prerelease suffixes, build metadata
-and existing version tags. Only `kiryl-vd` can run the jobs with write access,
+The first stable release must use the current untagged package version.
+Later releases must be exactly one patch, minor or major increase from the
+highest published stable version. The workflow reads all release-history
+pages, not only GitHub's latest label or publication order.
+
+A current unpublished version can be retried if it is still a valid next
+step. An unchanged version does not need an empty PR and can be published
+from checked `main`. Previously published versions remain reserved even if
+their tags are removed. Existing version tags are also rejected.
+The workflow rejects skipped versions, lower versions, leading zeros,
+prerelease suffixes and build metadata. Only `kiryl-vd` can run the jobs with write access,
 and the workflow must be started from `main` in `kiryl-vd/png2svg`. Both jobs
 check the account ID `61699922`, the original actor and the person requesting
 a rerun. Another user cannot publish by repeating a failed owner job. Do not
@@ -622,6 +628,18 @@ notes if the generated description is not sufficient.
 | New compatible features | `0.1.0` to `0.2.0` |
 | First stable API or incompatible changes after 1.0 | `0.2.0` to `1.0.0` |
 
+Only canonical next versions are accepted. For example, after `1.9.9`:
+
+| Increase | Allowed version |
+|---|---|
+| Patch | `1.9.10` |
+| Minor | `1.10.0` |
+| Major | `2.0.0` |
+
+`3.0.0`, `1.9.11`, `1.10.1` and `2.1.0` are rejected. A minor increase resets
+the patch part to zero. A major increase resets both minor and patch parts.
+Drafts and prereleases do not define the last stable version.
+
 Before 1.0, use a minor increase for incompatible changes and describe them
 in the release notes.
 
@@ -652,6 +670,7 @@ bypass just to use local release scripts.
 `.github/workflows/publish-release.yml` handles browser releases.
 `tools/prepare_release.py` validates and updates version files.
 `tools/release_request.py` identifies manual requests and merged version PRs.
+`tools/release_version_policy.py` rejects reused and skipped version numbers.
 `tools/check_release_checksums.py` checks the complete archive checksum list.
 Platform manifests are internal build artifacts, not public release assets.
 `.github/workflows/ci.yml` can check a prepared release commit.
