@@ -6,6 +6,8 @@ name: CI
 on:
   push:
   pull_request:
+  # PRs created with GITHUB_TOKEN need an explicit CI dispatch.
+  workflow_dispatch:
   # A release checks the exact prepared commit before it publishes binaries.
   workflow_call:
     inputs:

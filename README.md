@@ -531,7 +531,8 @@ SVG files in a browser on Windows.
 The CI configuration is in `.github/workflows/ci.yml`. It runs build, fmt,
 clippy and tests on `ubuntu-22.04` (Linux x86_64), `macos-15` (Apple Silicon)
 and `windows-2022` (Windows x64), plus build and tests with the MSRV on Linux.
-It also tests the release version tool with Python 3.12:
+It also tests version preparation, release authorization and checksums with
+Python 3.12:
 
 ```bash
 python3 -m unittest discover -s tools -p 'test_*.py'
@@ -543,20 +544,26 @@ do not need Python.
 ### Releases (for the owner)
 
 The recommended method is **Publish release** in GitHub Actions. You enter a
-version in the browser. No local release tools or separate token are needed.
-A merge into `main` does not publish a release. The crate is not published
-to crates.io.
+version in the browser. A higher version is prepared in a PR, not pushed to
+protected `main`. The owner reviews and merges that PR to start publication.
+No local release tools or separate token are needed. Ordinary PR merges do
+not publish releases. The crate is not published to crates.io.
 
 #### Publish from GitHub
 
 1. Open [GitHub Actions](https://github.com/kiryl-vd/png2svg/actions).
 2. Select **Publish release**, then **Run workflow**.
 3. Select branch **main**.
-4. Enter a stable version such as **0.1.0**, without the `v` prefix.
-5. Click **Run workflow** and check the run result.
+4. Enter a stable version such as **0.1.1**, without the `v` prefix.
+5. Click **Run workflow**. For a higher version, open the version PR linked
+   in the run summary.
+6. Wait for all required CI checks, review the changes, then merge the PR.
+7. The merge starts **Publish release** again, this time to build and publish
+   the requested version from the exact merged commit.
 
-Use `0.1.0` for the first release. The workflow accepts the current version
-for a first release or a retry, and a higher version for later releases.
+The workflow accepts the current untagged version for a first release or a
+retry, and a higher version for later releases. An unchanged version does not
+need an empty PR and can be published directly from checked `main`.
 It rejects lower versions, leading zeros, prerelease suffixes, build metadata
 and existing version tags. Only `kiryl-vd` can run the jobs with write access,
 and the workflow must be started from `main` in `kiryl-vd/png2svg`. Both jobs
@@ -567,25 +574,40 @@ workflow itself.
 
 The workflow performs these steps:
 
-1. Validate the version and update `Cargo.toml` and `Cargo.lock`. It preserves
-   the lockfile format for Rust 1.75. If the version changes, it sends a
-   `chore: release X.Y.Z` commit to `main` as `github-actions[bot]`.
-2. Run the reusable CI workflow on that exact commit. All three platforms,
-   the MSRV and the release version tests must pass.
+1. Validate the version. For a higher version, update `Cargo.toml` and
+   `Cargo.lock` on branch `release/vX.Y.Z`, preserving the Rust 1.75 lockfile
+   format. Create a version PR as `github-actions[bot]` and dispatch CI on
+   that branch. A repeated request reuses an existing open version PR.
+2. Wait for the owner to merge the version PR. Check that the merged source
+   contains the version requested by the branch name. Run reusable CI on the
+   exact merged commit. All three platforms, the MSRV and release tool tests
+   must pass.
 3. Use cargo-dist to build macOS Apple Silicon, Linux x86_64 and Windows x64
    archives, shell and PowerShell installers, source archive and SHA-256 files.
+   Platform manifests are passed to packaging so `sha256.sum` contains all
+   three binary archives and the source archive. Before publication, the
+   workflow checks the complete list against the release plan and verifies
+   every archive hash. Missing or incorrect entries stop the release.
 4. Create an annotated tag `vX.Y.Z` on the checked commit.
 5. Create a draft GitHub Release, upload all assets, then publish it with
    generated release notes. The draft stays hidden until uploads succeed.
 
-Manual releases are serialized. A running release is not cancelled when
-another release is requested. No version tag is created if checks or builds
-fail. A version commit may already be on `main` at that point.
+Release requests and publication runs are serialized. A running release is
+not cancelled when another request arrives. The workflow never merges a PR
+or pushes a version change directly to `main`. No version tag is created if
+checks or builds fail.
 
-The workflow uses the standard `GITHUB_TOKEN`. Repository rules must allow
-it to update `main`, create tags and publish releases. A push with this token
-does not start another workflow, so **Publish release** calls CI itself and
-publishes the assets itself. It does not rely on the separate tag workflow.
+The workflow uses the standard `GITHUB_TOKEN`. In repository **Settings >
+Actions > General > Workflow permissions**, enable **Allow GitHub Actions to
+create and approve pull requests**. The workflow only creates PRs. It does
+not approve or merge them. Keep default workflow permissions read-only.
+
+Keep the `main` ruleset active with required PRs, resolved review threads and
+all five CI checks. No bypass actor is needed, including GitHub Actions.
+Version branches and tags must be allowed. Token-created PRs do not start CI
+automatically, so the workflow explicitly dispatches CI on the version branch.
+The owner's merge starts publication through the PR closed event. Publication
+calls CI again and does not rely on the separate tag workflow.
 
 After publication, open [Releases](https://github.com/kiryl-vd/png2svg/releases).
 Download the archive for your system, check its SHA-256 value, extract it and
@@ -607,38 +629,34 @@ in the release notes.
 
 * Read the failed job log first. For a temporary runner, network or upload
   error, use **Re-run failed jobs** in the original workflow run.
-* If preparation changed the version but no tag exists, you can start another
-  run with the same version. Do not increase the version just to retry a build.
+* If a version PR is still open, request the same version again to reuse it
+  and dispatch CI again. Do not increase the version just to retry a check.
+* If the version PR was merged but no tag exists, you can request the same
+  version from `main` to retry publication.
 * If the tag already exists, retry the failed publication job in the original
   run. It checks that the tag still points to the prepared commit and resumes
   an incomplete draft. A new workflow run rejects an existing tag.
 * A published release is not overwritten by a retry. Never move or delete
   its tag. If released source needs a fix, publish a new patch version.
 
-#### Optional local release
+#### Legacy local release tools
 
-The previous cargo-release method is still available. Install the pinned
-versions with a current stable Rust toolchain:
-
-```bash
-cargo install cargo-release --version 1.1.7 --locked
-cargo install cargo-dist --version 0.34.0 --locked
-```
-
-Use a clean `main` that matches `origin/main` and has passed CI. For the first
-release, use `cargo release release` as a dry run, then
-`cargo release release --execute`. For later releases, use `patch`, `minor`
-or `major` instead of `release`. A locally sent version tag starts the
-separate generated **Release** workflow. Do not use both methods for the
-same version. Local release tools are developer tools, not program dependencies.
+`release.toml` and the generated tag workflow remain for the previous local
+cargo-release method. That method tries to send version commits directly to
+`main` and is not compatible with the active PR requirement. Use the browser
+version PR process instead. Do not disable protection or grant a broad bot
+bypass just to use local release scripts.
 
 #### Release configuration
 
 `.github/workflows/publish-release.yml` handles browser releases.
 `tools/prepare_release.py` validates and updates version files.
+`tools/release_request.py` identifies manual requests and merged version PRs.
+`tools/check_release_checksums.py` checks the complete archive checksum list.
+Platform manifests are internal build artifacts, not public release assets.
 `.github/workflows/ci.yml` can check a prepared release commit.
 `dist-workspace.toml` is the source of the target and runner matrix.
-`release.toml` configures the optional local cargo-release method.
+`release.toml` preserves the legacy local cargo-release configuration.
 
 `.github/workflows/release.yml` is generated by cargo-dist. Do not edit it by
 hand. After a dist configuration change, run `dist generate` with the pinned
