@@ -1,6 +1,6 @@
-# Manual release from GitHub. No local release tools or extra token are needed.
+# Request a version PR from GitHub, then publish when the owner merges it.
 name: Publish release
-run-name: Publish png2svg ${{ inputs.version }}
+run-name: Release png2svg ${{ inputs.version || github.event.pull_request.head.ref }}
 
 on:
   workflow_dispatch:
@@ -9,6 +9,9 @@ on:
         description: 'Stable version without v, for example 0.1.0'
         required: true
         type: string
+  pull_request:
+    branches: [main]
+    types: [closed]
 
 # Serialize manual releases. Do not cancel a release that already started.
 concurrency:
@@ -34,53 +37,92 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      pull-requests: write
+      actions: write
     outputs:
+      publish: ${{ steps.prepare.outputs.publish }}
       revision: ${{ steps.prepare.outputs.revision }}
       tag: ${{ steps.prepare.outputs.tag }}
       matrix: ${{ steps.prepare.outputs.matrix }}
-    env:
-      RELEASE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.pull_request.merge_commit_sha || 'main' }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Validate the version and check for an existing tag
+      - name: Identify a manual request or merged version PR
+        id: request
+        shell: bash
+        run: python tools/release_request.py >> "$GITHUB_OUTPUT"
+      - name: Check for an existing version tag
+        if: steps.request.outputs.is_release == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
         shell: bash
         run: |
-          python tools/prepare_release.py "$RELEASE_VERSION" --check
           if git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION"; then
             echo '::error::This version tag already exists. Do not reuse a published version.'
             exit 1
           fi
       - name: Install dist
+        if: steps.request.outputs.is_release == 'true'
         shell: bash
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-installer.sh | sh
-      - name: Prepare the version commit and release plan
+      - name: Create a version PR or prepare the merged release
+        if: steps.request.outputs.is_release == 'true'
         id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          CURRENT_VERSION: ${{ steps.request.outputs.current }}
         shell: bash
         run: |
           python -m unittest discover -s tools -p 'test_*.py'
-          python tools/prepare_release.py "$RELEASE_VERSION"
           dist generate --check
-          dist plan --tag "v$RELEASE_VERSION" --output-format=json > release-plan.json
 
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.toml Cargo.lock
-          if ! git diff --cached --quiet; then
-            parent=$(git rev-parse HEAD)
-            tree=$(git write-tree)
-            revision=$(printf 'chore: release %s\n' "$RELEASE_VERSION" | git commit-tree "$tree" -p "$parent")
-            git update-ref refs/heads/main "$revision" "$parent"
-            # A normal push fails if another commit changed main. Never force it.
-            git push origin main
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$RELEASE_VERSION" != "$CURRENT_VERSION" ]; then
+            branch="release/v$RELEASE_VERSION"
+            pr_url=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --state open --json url --jq '.[0].url // empty')
+            if [ -z "$pr_url" ]; then
+              if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+                echo '::error::The release branch already exists without an open PR. Inspect it before retrying.'
+                exit 1
+              else
+                status=$?
+                if [ "$status" -ne 2 ]; then exit "$status"; fi
+              fi
+              python tools/prepare_release.py "$RELEASE_VERSION"
+              git switch -c "$branch"
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add Cargo.toml Cargo.lock
+              parent=$(git rev-parse HEAD)
+              tree=$(git write-tree)
+              revision=$(printf 'chore: release %s\n' "$RELEASE_VERSION" | git commit-tree "$tree" -p "$parent")
+              git update-ref "refs/heads/$branch" "$revision" "$parent"
+              # Never push version changes directly to protected main.
+              git push origin "refs/heads/$branch"
+              printf '## Purpose\n\nPrepare png2svg %s for release. Publication starts after the owner merges this PR.\n\n## Changes\n\n- Update the package version in Cargo.toml and Cargo.lock.\n- Keep the lockfile format compatible with Rust 1.75.\n- Run CI on this branch before merge.\n' \
+                "$RELEASE_VERSION" > version-pr.md
+              pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+                --title "chore: release $RELEASE_VERSION" --body-file version-pr.md)
+            fi
+            # Token-created PRs do not trigger CI. Dispatch it on the PR's SHA.
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            printf 'Version PR: [%s](%s). Wait for CI, then merge it to publish.\n' \
+              "$RELEASE_VERSION" "$pr_url" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
 
+          # Merged version PRs must already contain the requested version.
+          # A first release can also use an unchanged, untagged main version.
+          dist plan --tag "v$RELEASE_VERSION" --output-format=json > release-plan.json
           {
+            echo 'publish=true'
             echo "revision=$(git rev-parse HEAD)"
             echo "tag=v$RELEASE_VERSION"
             echo "matrix=$(jq -c '.ci.github.artifacts_matrix' release-plan.json)"
@@ -88,6 +130,7 @@ jobs:
 
   checks:
     needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     uses: ./.github/workflows/ci.yml
     with:
       revision: ${{ needs.prepare.outputs.revision }}
@@ -102,6 +145,7 @@ jobs:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      BUILD_MANIFEST_NAME: target/distrib/${{ matrix.host }}-dist-manifest.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,6 +159,9 @@ jobs:
       - name: Build platform archives
         run: dist build --tag "$RELEASE_TAG" ${{ matrix.dist_args }} --output-format=json > local-dist-manifest.json
         if: runner.os != 'Windows'
+      - name: Keep platform checksum metadata for packaging
+        shell: bash
+        run: cp local-dist-manifest.json "$BUILD_MANIFEST_NAME"
       - uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.host }}
@@ -123,6 +170,7 @@ jobs:
             target/distrib/*.tar.xz
             target/distrib/*.zip
             target/distrib/*.sha256
+            target/distrib/*-dist-manifest.json
 
   package:
     needs: [prepare, build]
@@ -146,6 +194,11 @@ jobs:
       - name: Build installers, source archive and checksums
         shell: bash
         run: dist build --tag "$RELEASE_TAG" --artifacts=global --output-format=json > global-dist-manifest.json
+      - name: Check the complete archive checksum list before publication
+        shell: bash
+        run: |
+          dist plan --tag "$RELEASE_TAG" --output-format=json > release-plan.json
+          python3 tools/check_release_checksums.py release-plan.json target/distrib
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets

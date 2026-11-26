@@ -81,10 +81,14 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
 | `examples/` | `bench` (table), `render` (SVG back to PNG), `gaps` (find uncovered pixels) |
 | `.github/workflows/ci.yml` | Build, format, clippy, tests and MSRV checks |
 | `.github/workflows/release.yml` | Generated workflow for locally sent version tags |
-| `.github/workflows/publish-release.yml` | Browser release, version update, checks and publication |
+| `.github/workflows/publish-release.yml` | Version PR request and publication after owner merge |
+| `tools/release_request.py` | Manual request and merged version PR validation |
+| `tools/test_release_request.py` | Protected-branch release request regression tests |
 | `tools/prepare_release.py` | Stable version validation and Cargo version updates |
 | `tools/test_prepare_release.py` | Unit tests for release version preparation |
 | `tools/test_release_authorization.py` | Owner-only start and rerun authorization tests |
+| `tools/check_release_checksums.py` | Complete archive checksum verification |
+| `tools/test_release_checksums.py` | Checksum and manifest transfer regression tests |
 | `dist-workspace.toml` | cargo-dist version, targets, installers and hosting |
 | `.cargo/config.toml` | Static MSVC C runtime for Windows binaries |
 | `release.toml` | cargo-release branch, version commit, tag and push rules |
@@ -115,13 +119,13 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
 
 * Read [Releases (for the owner)](README.md#releases-for-the-owner) before
   changing release configuration.
-* The owner starts browser releases from `main` with the **Publish release**
-  workflow and a version such as `0.1.0`. It updates both Cargo version files,
-  checks the prepared commit with reusable CI, builds with cargo-dist and
-  publishes the release. A merge does not create a release.
-* The optional local cargo-release method still sends a version tag `vX.Y.Z`
-  to start the separate generated workflow. Do not use both methods for the
-  same version.
+* The owner requests a version with **Publish release** on `main`. A higher
+  version is committed to `release/vX.Y.Z` and submitted as a version PR.
+  The owner merges it after CI. That merge starts checks and publication
+  from the exact merged commit. Ordinary PR merges must not publish releases.
+* Never push version commits directly to protected `main`, merge version PRs
+  automatically or add a broad GitHub Actions bypass. The legacy local
+  cargo-release flow is not compatible with the active PR requirement.
 * Do not create version commits, tags, pushes or GitHub Releases unless asked.
   A cargo-release dry run has no `--execute` flag. Do not use `--execute`
   without permission.
@@ -141,11 +145,17 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
   and release concurrency guard. Both jobs with write access must check
   `kiryl-vd`, account ID `61699922`, repository, branch and `triggering_actor`.
   A retry can skip preparation, so publication needs its own check.
-* The manual workflow uses `GITHUB_TOKEN`. Its pushes do not start other
-  workflows. Do not replace its CI call with an assumption that tag or branch
-  pushes will start CI or the generated release workflow.
+* The manual workflow uses `GITHUB_TOKEN`. Its branch pushes and PR creation
+  do not start CI. Dispatch CI explicitly on the version branch so required
+  checks belong to the PR's commit. The owner's merge starts publication.
+  Keep publication CI on the exact merged commit.
+* Keep the active main ruleset's PR and CI requirements. The workflow only
+  creates PRs. The owner must merge them. Do not add a ruleset bypass actor.
 * Keep release uploads in a draft until all assets are ready. A retry may
   resume a draft but must not overwrite a published release or change its tag.
+* Pass each platform's `*-dist-manifest.json` to packaging. The global checksum
+  list needs the checksum metadata from those manifests. Keep them internal,
+  and check `sha256.sum` against the full release plan before publication.
 * Keep the manual workflow's dist installer version consistent with
   `dist-workspace.toml`. Test version preparation with Python 3.11 or newer:
   `python3 -m unittest discover -s tools -p 'test_*.py'`.
