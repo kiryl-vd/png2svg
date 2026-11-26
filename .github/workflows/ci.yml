@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install the stable Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt clippy
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Format
         run: cargo fmt --check
       - name: Clippy
