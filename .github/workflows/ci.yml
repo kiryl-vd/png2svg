@@ -6,6 +6,12 @@ name: CI
 on:
   push:
   pull_request:
+  # A release checks the exact prepared commit before it publishes binaries.
+  workflow_call:
+    inputs:
+      revision:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +29,8 @@ jobs:
         os: [ubuntu-22.04, macos-15, windows-2022]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
       - name: Install the stable Rust toolchain
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Format
@@ -39,9 +47,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
       - name: Install Rust 1.75
         run: rustup toolchain install 1.75.0 --profile minimal
       - name: Build
         run: cargo +1.75.0 build --release
       - name: Test
         run: cargo +1.75.0 test
+
+  release-tools:
+    name: Check release tools
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test version preparation and release authorization
+        run: python -m unittest discover -s tools -p 'test_*.py'

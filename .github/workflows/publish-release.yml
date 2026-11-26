@@ -1,0 +1,219 @@
+# Manual release from GitHub. No local release tools or extra token are needed.
+name: Publish release
+run-name: Publish png2svg ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version without v, for example 0.1.0'
+        required: true
+        type: string
+
+# Serialize manual releases. Do not cancel a release that already started.
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    # Pin the account ID as well as the login. A rerun must also be started
+    # by the owner. Do not trust the original actor alone on reruns.
+    if: >-
+      github.repository == 'kiryl-vd/png2svg' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor_id == '61699922' &&
+      github.actor == 'kiryl-vd' &&
+      github.triggering_actor == 'kiryl-vd'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.prepare.outputs.revision }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      matrix: ${{ steps.prepare.outputs.matrix }}
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate the version and check for an existing tag
+        shell: bash
+        run: |
+          python tools/prepare_release.py "$RELEASE_VERSION" --check
+          if git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION"; then
+            echo '::error::This version tag already exists. Do not reuse a published version.'
+            exit 1
+          fi
+      - name: Install dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-installer.sh | sh
+      - name: Prepare the version commit and release plan
+        id: prepare
+        shell: bash
+        run: |
+          python -m unittest discover -s tools -p 'test_*.py'
+          python tools/prepare_release.py "$RELEASE_VERSION"
+          dist generate --check
+          dist plan --tag "v$RELEASE_VERSION" --output-format=json > release-plan.json
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock
+          if ! git diff --cached --quiet; then
+            parent=$(git rev-parse HEAD)
+            tree=$(git write-tree)
+            revision=$(printf 'chore: release %s\n' "$RELEASE_VERSION" | git commit-tree "$tree" -p "$parent")
+            git update-ref refs/heads/main "$revision" "$parent"
+            # A normal push fails if another commit changed main. Never force it.
+            git push origin main
+          fi
+
+          {
+            echo "revision=$(git rev-parse HEAD)"
+            echo "tag=v$RELEASE_VERSION"
+            echo "matrix=$(jq -c '.ci.github.artifacts_matrix' release-plan.json)"
+          } >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      revision: ${{ needs.prepare.outputs.revision }}
+
+  build:
+    name: Build (${{ matrix.host }})
+    needs: [prepare, checks]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      # Use dist's configured targets and runners, not a second target list.
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - name: Install dist
+        run: ${{ matrix.install_dist.run }}
+      - name: Build platform archives
+        run: dist build --tag "$env:RELEASE_TAG" ${{ matrix.dist_args }} --output-format=json > local-dist-manifest.json
+        if: runner.os == 'Windows'
+      - name: Build platform archives
+        run: dist build --tag "$RELEASE_TAG" ${{ matrix.dist_args }} --output-format=json > local-dist-manifest.json
+        if: runner.os != 'Windows'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.host }}
+          if-no-files-found: error
+          path: |
+            target/distrib/*.tar.xz
+            target/distrib/*.zip
+            target/distrib/*.sha256
+
+  package:
+    needs: [prepare, build]
+    runs-on: ubuntu-22.04
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-installer.sh | sh
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: target/distrib
+          merge-multiple: true
+      - name: Build installers, source archive and checksums
+        shell: bash
+        run: dist build --tag "$RELEASE_TAG" --artifacts=global --output-format=json > global-dist-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          if-no-files-found: error
+          path: |
+            target/distrib/*.tar.xz
+            target/distrib/*.zip
+            target/distrib/*.tar.gz
+            target/distrib/*.sha256
+            target/distrib/sha256.sum
+            target/distrib/png2svg-installer.sh
+            target/distrib/png2svg-installer.ps1
+
+  publish:
+    needs: [prepare, package]
+    # Repeat the authorization check here. A failed publish job can be rerun
+    # without repeating the successful prepare job.
+    if: >-
+      github.repository == 'kiryl-vd/png2svg' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor_id == '61699922' &&
+      github.actor == 'kiryl-vd' &&
+      github.triggering_actor == 'kiryl-vd'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Create the version tag and GitHub Release
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # A retry may find the tag created by the previous publish attempt.
+          # It must still refer to exactly the commit that was checked and built.
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            if [ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" != "$RELEASE_REVISION" ]; then
+              echo '::error::The version tag points to another commit.'
+              exit 1
+            fi
+          else
+            git tag -a "$RELEASE_TAG" "$RELEASE_REVISION" -m "Release ${RELEASE_TAG#v}"
+            # GITHUB_TOKEN does not trigger the separate tag release workflow.
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+
+          if draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft'); then
+            if [ "$draft" != true ]; then
+              echo 'The release is already published. Its assets will not be changed.'
+              exit 0
+            fi
+          else
+            # Keep the release hidden until every asset has been uploaded.
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --title "png2svg ${RELEASE_TAG#v}" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          printf 'Published [%s](https://github.com/%s/releases/tag/%s)\n' \
+            "$RELEASE_TAG" "$GITHUB_REPOSITORY" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

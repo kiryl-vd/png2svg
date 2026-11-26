@@ -80,7 +80,11 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
 | `tools/` | Python and shell helpers for test data and measuring |
 | `examples/` | `bench` (table), `render` (SVG back to PNG), `gaps` (find uncovered pixels) |
 | `.github/workflows/ci.yml` | Build, format, clippy, tests and MSRV checks |
-| `.github/workflows/release.yml` | Generated GitHub release workflow |
+| `.github/workflows/release.yml` | Generated workflow for locally sent version tags |
+| `.github/workflows/publish-release.yml` | Browser release, version update, checks and publication |
+| `tools/prepare_release.py` | Stable version validation and Cargo version updates |
+| `tools/test_prepare_release.py` | Unit tests for release version preparation |
+| `tools/test_release_authorization.py` | Owner-only start and rerun authorization tests |
 | `dist-workspace.toml` | cargo-dist version, targets, installers and hosting |
 | `.cargo/config.toml` | Static MSVC C runtime for Windows binaries |
 | `release.toml` | cargo-release branch, version commit, tag and push rules |
@@ -111,8 +115,13 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
 
 * Read [Releases (for the owner)](README.md#releases-for-the-owner) before
   changing release configuration.
-* Releases are started by the owner from `main` with cargo-release. The version
-  tag `vX.Y.Z` starts cargo-dist on GitHub. A merge does not create a release.
+* The owner starts browser releases from `main` with the **Publish release**
+  workflow and a version such as `0.1.0`. It updates both Cargo version files,
+  checks the prepared commit with reusable CI, builds with cargo-dist and
+  publishes the release. A merge does not create a release.
+* The optional local cargo-release method still sends a version tag `vX.Y.Z`
+  to start the separate generated workflow. Do not use both methods for the
+  same version.
 * Do not create version commits, tags, pushes or GitHub Releases unless asked.
   A cargo-release dry run has no `--execute` flag. Do not use `--execute`
   without permission.
@@ -127,7 +136,20 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
 * Do not edit `.github/workflows/release.yml` by hand. Change
   `dist-workspace.toml`, then use the pinned cargo-dist version to run
   `dist generate`. Check `dist generate --check` and `dist plan`.
-* CI and Release run independently. Check that CI passed before a release.
+* Browser releases must pass CI on the exact prepared commit before builds
+  and publication. Keep the owner and `main` restrictions, version validation
+  and release concurrency guard. Both jobs with write access must check
+  `kiryl-vd`, account ID `61699922`, repository, branch and `triggering_actor`.
+  A retry can skip preparation, so publication needs its own check.
+* The manual workflow uses `GITHUB_TOKEN`. Its pushes do not start other
+  workflows. Do not replace its CI call with an assumption that tag or branch
+  pushes will start CI or the generated release workflow.
+* Keep release uploads in a draft until all assets are ready. A retry may
+  resume a draft but must not overwrite a published release or change its tag.
+* Keep the manual workflow's dist installer version consistent with
+  `dist-workspace.toml`. Test version preparation with Python 3.11 or newer:
+  `python3 -m unittest discover -s tools -p 'test_*.py'`.
+* Local tag releases run separately from CI. Check that CI passed first.
 * Never move or delete a published version tag.
 
 ## Attribution request

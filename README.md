@@ -531,133 +531,121 @@ SVG files in a browser on Windows.
 The CI configuration is in `.github/workflows/ci.yml`. It runs build, fmt,
 clippy and tests on `ubuntu-22.04` (Linux x86_64), `macos-15` (Apple Silicon)
 and `windows-2022` (Windows x64), plus build and tests with the MSRV on Linux.
+It also tests the release version tool with Python 3.12:
+
+```bash
+python3 -m unittest discover -s tools -p 'test_*.py'
+```
+
+The version tool needs Python 3.11 or newer. The program and its Rust tests
+do not need Python.
 
 ### Releases (for the owner)
 
-Releases use **cargo-release** and **cargo-dist**. A merge into `main` runs
-CI checks but does not change the version or publish a release. The owner
-starts each release from `main`. A version tag starts the release workflow.
-The crate is not published to crates.io.
+The recommended method is **Publish release** in GitHub Actions. You enter a
+version in the browser. No local release tools or separate token are needed.
+A merge into `main` does not publish a release. The crate is not published
+to crates.io.
 
-#### Initial setup
+#### Publish from GitHub
 
-1. Create `https://github.com/kiryl-vd/png2svg` on GitHub. Enable GitHub Actions.
-   Repository rules must allow the owner to send release commits and tags.
-   The release workflow needs `contents: write` for its `GITHUB_TOKEN`.
-   No separate release token is needed.
-2. Use a Git repository on branch `main`. Create the first commit and include
-   the source, test data, lockfile and release configuration. Do not include
-   `target/`. Set `origin` to this repository if it is not already present:
+1. Open [GitHub Actions](https://github.com/kiryl-vd/png2svg/actions).
+2. Select **Publish release**, then **Run workflow**.
+3. Select branch **main**.
+4. Enter a stable version such as **0.1.0**, without the `v` prefix.
+5. Click **Run workflow** and check the run result.
 
-   ```bash
-   git remote add origin https://github.com/kiryl-vd/png2svg.git
-   git push -u origin main
-   ```
+Use `0.1.0` for the first release. The workflow accepts the current version
+for a first release or a retry, and a higher version for later releases.
+It rejects lower versions, leading zeros, prerelease suffixes, build metadata
+and existing version tags. Only `kiryl-vd` can run the jobs with write access,
+and the workflow must be started from `main` in `kiryl-vd/png2svg`. Both jobs
+check the account ID `61699922`, the original actor and the person requesting
+a rerun. Another user cannot publish by repeating a failed owner job. Do not
+give other people write or admin access, which would let them change the
+workflow itself.
 
-3. Install the release tools with a current stable Rust toolchain:
+The workflow performs these steps:
 
-   ```bash
-   cargo install cargo-release --version 1.1.7 --locked
-   cargo install cargo-dist --version 0.34.0 --locked
-   ```
+1. Validate the version and update `Cargo.toml` and `Cargo.lock`. It preserves
+   the lockfile format for Rust 1.75. If the version changes, it sends a
+   `chore: release X.Y.Z` commit to `main` as `github-actions[bot]`.
+2. Run the reusable CI workflow on that exact commit. All three platforms,
+   the MSRV and the release version tests must pass.
+3. Use cargo-dist to build macOS Apple Silicon, Linux x86_64 and Windows x64
+   archives, shell and PowerShell installers, source archive and SHA-256 files.
+4. Create an annotated tag `vX.Y.Z` on the checked commit.
+5. Create a draft GitHub Release, upload all assets, then publish it with
+   generated release notes. The draft stays hidden until uploads succeed.
 
-   These are developer tools, not program dependencies. Rust 1.75 is the
-   minimum version for the program, not for the release tools. If Cargo is
-   not found, add `~/.cargo/bin` to `PATH`.
-4. Wait for a successful CI run on `main` before the first release.
+Manual releases are serialized. A running release is not cancelled when
+another release is requested. No version tag is created if checks or builds
+fail. A version commit may already be on `main` at that point.
 
-#### First release
+The workflow uses the standard `GITHUB_TOKEN`. Repository rules must allow
+it to update `main`, create tags and publish releases. A push with this token
+does not start another workflow, so **Publish release** calls CI itself and
+publishes the assets itself. It does not rely on the separate tag workflow.
 
-The current version is `0.1.0`. To release it without a version increase:
+After publication, open [Releases](https://github.com/kiryl-vd/png2svg/releases).
+Download the archive for your system, check its SHA-256 value, extract it and
+run `png2svg --version`. Convert a PNG and inspect the SVG. Add more release
+notes if the generated description is not sufficient.
 
-```bash
-cargo release release             # dry run
-cargo release release --execute   # creates and sends v0.1.0
-```
+#### Choose a version
 
-Use the same checks below before this release. The tag must not already exist.
+| Change | Version example |
+|---|---|
+| Bug fixes that keep the interface compatible | `0.1.0` to `0.1.1` |
+| New compatible features | `0.1.0` to `0.2.0` |
+| First stable API or incompatible changes after 1.0 | `0.2.0` to `1.0.0` |
 
-#### Next releases
-
-1. Use `main` with no local changes. Fetch the remote commits and tags, then
-   make sure local `main` matches `origin/main`:
-
-   ```bash
-   git switch main
-   git fetch origin --tags
-   git pull --ff-only origin main
-   git status --short
-   ```
-
-2. Check that CI passed for this commit. The CI and Release workflows are
-   separate. The Release workflow does not wait for the CI workflow.
-   Run the local checks too:
-
-   ```bash
-   cargo fmt --check
-   cargo clippy --all-targets -- -D warnings
-   cargo build --release
-   cargo test --all-targets
-   dist generate --check
-   dist plan
-   ```
-
-3. Choose the version increase:
-
-   | Level | Use it for | Example |
-   |---|---|---|
-   | `patch` | Bug fixes that keep the interface compatible | `0.1.0` to `0.1.1` |
-   | `minor` | New compatible features | `0.1.0` to `0.2.0` |
-   | `major` | Incompatible changes, or the first stable API | `0.2.0` to `1.0.0` |
-
-   Before 1.0, use a minor increase for incompatible changes and describe them
-   in the release notes.
-
-4. Review a dry run, then execute the release. For example:
-
-   ```bash
-   cargo release minor
-   cargo release minor --execute
-   ```
-
-   Without `--execute`, cargo-release does not change files or send anything.
-   With `--execute`, it updates `Cargo.toml` and `Cargo.lock`, creates a version
-   commit and an annotated tag `vX.Y.Z`, then sends the commit and tag to
-   `origin`. The version commit message is `chore: release X.Y.Z`. Commit and
-   tag signing are disabled. Review the version before you confirm.
-
-5. Open [GitHub Actions](https://github.com/kiryl-vd/png2svg/actions) and check
-   the Release run for this tag. It builds the three active targets, creates
-   archives, SHA-256 files, a shell installer and a PowerShell installer, then
-   publishes a GitHub Release.
-   Pull requests only check the release plan. They do not publish a release.
-6. Check the [release page](https://github.com/kiryl-vd/png2svg/releases).
-   Download the archive for your system, check its SHA-256 value, extract it
-   and run `png2svg --version`. Convert a test PNG and inspect the SVG.
-   Add a short description of the changes to the release notes on GitHub.
+Before 1.0, use a minor increase for incompatible changes and describe them
+in the release notes.
 
 #### If a release fails
 
-* Read the failed job log first. For a temporary runner or network error,
-  repeat the failed jobs in GitHub Actions. Do not increase the version again
-  just to retry a build.
-* If the commit or tag was not sent, inspect `git status` and `git tag`.
-  If cargo-release already created both locally, send the existing commit
-  with `git push origin main` and the specific tag with
-  `git push origin vX.Y.Z`. Do not send all local tags.
-* If the source or configuration needs a fix, create a fix commit on `main`
-  and release a new patch version. Do not move a published version tag.
-* Only if no release was published and the failed tag must be removed, first
-  cancel its workflow runs and check that no GitHub Release exists. Then the
-  owner can remove that specific tag with `git push origin --delete vX.Y.Z`
-  and `git tag -d vX.Y.Z`. Do not delete tags of published releases.
+* Read the failed job log first. For a temporary runner, network or upload
+  error, use **Re-run failed jobs** in the original workflow run.
+* If preparation changed the version but no tag exists, you can start another
+  run with the same version. Do not increase the version just to retry a build.
+* If the tag already exists, retry the failed publication job in the original
+  run. It checks that the tag still points to the prepared commit and resumes
+  an incomplete draft. A new workflow run rejects an existing tag.
+* A published release is not overwritten by a retry. Never move or delete
+  its tag. If released source needs a fix, publish a new patch version.
 
-The configuration is in `release.toml` and `dist-workspace.toml`.
+#### Optional local release
+
+The previous cargo-release method is still available. Install the pinned
+versions with a current stable Rust toolchain:
+
+```bash
+cargo install cargo-release --version 1.1.7 --locked
+cargo install cargo-dist --version 0.34.0 --locked
+```
+
+Use a clean `main` that matches `origin/main` and has passed CI. For the first
+release, use `cargo release release` as a dry run, then
+`cargo release release --execute`. For later releases, use `patch`, `minor`
+or `major` instead of `release`. A locally sent version tag starts the
+separate generated **Release** workflow. Do not use both methods for the
+same version. Local release tools are developer tools, not program dependencies.
+
+#### Release configuration
+
+`.github/workflows/publish-release.yml` handles browser releases.
+`tools/prepare_release.py` validates and updates version files.
+`.github/workflows/ci.yml` can check a prepared release commit.
+`dist-workspace.toml` is the source of the target and runner matrix.
+`release.toml` configures the optional local cargo-release method.
+
 `.github/workflows/release.yml` is generated by cargo-dist. Do not edit it by
 hand. After a dist configuration change, run `dist generate` with the pinned
 version. Check `dist generate --check` and `dist plan`, then include the
-updated workflow in the configuration commit. The full three-platform release
-can only be checked on GitHub.
+updated workflow in the configuration commit. Keep the dist installer version
+in the manual workflow consistent with `dist-workspace.toml`. The full
+three-platform release can only be checked on GitHub.
 
 ## License
 
