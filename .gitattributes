@@ -1,0 +1,20 @@
+# Normalize line endings for text files. Output must be the same on every platform.
+* text=auto eol=lf
+
+# Source and documentation
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary test data. Git must never change these bytes.
+*.png binary
+*.bin binary
+tests/pngsuite/expected.bin binary
+
+# Generated SVG output is compared byte by byte.
+*.svg text eol=lf

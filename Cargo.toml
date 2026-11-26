@@ -1,0 +1,47 @@
+[package]
+name = "png2svg"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Converts PNG images to compact SVG vector images with a transparent background"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/kiryl-vd/png2svg"
+publish = false
+
+# Distribute binaries on GitHub without publishing the crate to crates.io.
+[package.metadata.dist]
+dist = true
+
+[lib]
+name = "png2svg"
+path = "src/lib.rs"
+
+[[bin]]
+name = "png2svg"
+path = "src/main.rs"
+
+# No runtime dependencies on purpose (requirement TECH-05).
+[dependencies]
+
+# No dev dependencies either: the tests use their own tiny PNG writer,
+# SVG parser and rasterizer (see tests/common).
+[dev-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+# Keep "unwind": main() uses catch_unwind to turn any unexpected panic into a
+# normal error message and exit code 1 (requirement CLI-04).
+panic = "unwind"
+
+# The quality tests draw images with a small software rasterizer. An optimized
+# test build makes them several times faster.
+[profile.test]
+opt-level = 2
+
+# Use the same size optimizations and panic guard in release archives.
+[profile.dist]
+inherits = "release"

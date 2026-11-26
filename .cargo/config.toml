@@ -1,0 +1,4 @@
+# Include the MSVC C runtime in Windows binaries so users do not need to
+# install the Visual C++ runtime separately.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

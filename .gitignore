@@ -1,0 +1,27 @@
+# Build output and downloaded release files.
+/target/
+/png2svg
+/png2svg.exe
+/png2svg-installer.sh
+/png2svg-installer.ps1
+/*.tar.xz
+/*.zip
+
+# Local configuration and session notes.
+.env
+.env.*
+!.env.example
+/CONTEXT.md
+.idea/
+.vscode/
+
+# Operating system files, editor backups and Python caches.
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+*.swp
+*.swo
+*~
+__pycache__/
+*.py[cod]

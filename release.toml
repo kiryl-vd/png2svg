@@ -1,0 +1,16 @@
+# Release binaries from main. Do not publish to crates.io.
+allow-branch = ["main"]
+publish = false
+
+# A version tag starts the GitHub release workflow.
+tag = true
+tag-name = "v{{version}}"
+tag-message = "Release {{version}}"
+consolidate-commits = false
+pre-release-commit-message = "chore: release {{version}}"
+sign-commit = false
+sign-tag = false
+
+# Send the version commit and tag to the project remote.
+push = true
+push-remote = "origin"
