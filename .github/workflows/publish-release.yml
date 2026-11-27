@@ -52,10 +52,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Identify a manual request or merged version PR
+      - name: Read all published release history before accepting a version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > release-history.json
+      - name: Identify and validate a manual request or merged version PR
         id: request
         shell: bash
-        run: python tools/release_request.py >> "$GITHUB_OUTPUT"
+        run: python tools/release_request.py --release-history release-history.json >> "$GITHUB_OUTPUT"
       - name: Check for an existing version tag
         if: steps.request.outputs.is_release == 'true'
         env:

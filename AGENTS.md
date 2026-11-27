@@ -84,6 +84,8 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
 | `.github/workflows/publish-release.yml` | Version PR request and publication after owner merge |
 | `tools/release_request.py` | Manual request and merged version PR validation |
 | `tools/test_release_request.py` | Protected-branch release request regression tests |
+| `tools/release_version_policy.py` | Published version reuse and one-step increase rules |
+| `tools/test_release_version_policy.py` | Version sequence and paginated history tests |
 | `tools/prepare_release.py` | Stable version validation and Cargo version updates |
 | `tools/test_prepare_release.py` | Unit tests for release version preparation |
 | `tools/test_release_authorization.py` | Owner-only start and rerun authorization tests |
@@ -151,6 +153,11 @@ If `cargo` is not found, add `~/.cargo/bin` to `PATH`.
   Keep publication CI on the exact merged commit.
 * Keep the active main ruleset's PR and CI requirements. The workflow only
   creates PRs. The owner must merge them. Do not add a ruleset bypass actor.
+* Before version changes or publication, read every page of release history.
+  Reject published version reuse and require one canonical patch, minor or
+  major increase from the highest published stable version. Do not use
+  publication order or GitHub's latest label as the baseline. Keep the
+  existing-tag check and unpublished retry support.
 * Keep release uploads in a draft until all assets are ready. A retry may
   resume a draft but must not overwrite a published release or change its tag.
 * Pass each platform's `*-dist-manifest.json` to packaging. The global checksum

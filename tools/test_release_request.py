@@ -10,6 +10,7 @@ from test_prepare_release import MANIFEST, LOCK
 
 
 REPOSITORY = "kiryl-vd/png2svg"
+RELEASES = [{"tag_name": "v0.1.0", "draft": False, "prerelease": False}]
 MERGED_PR = {"action": "closed", "pull_request": {
     "merged": True,
     "base": {"ref": "main"},
@@ -75,23 +76,23 @@ class PreparedRequestTests(unittest.TestCase):
         (self.root / "Cargo.lock").write_text(LOCK)
 
     def test_higher_manual_version_is_valid_without_changing_files(self):
-        result = prepare_request(self.root, "workflow_dispatch", {"inputs": {"version": "0.2.0"}}, REPOSITORY)
+        result = prepare_request(self.root, "workflow_dispatch", {"inputs": {"version": "0.2.0"}}, REPOSITORY, RELEASES)
         self.assertEqual(result, ("0.2.0", "0.1.0"))
         self.assertEqual((self.root / "Cargo.toml").read_text(), MANIFEST)
 
     def test_unchanged_first_version_is_valid(self):
-        result = prepare_request(self.root, "workflow_dispatch", {"inputs": {"version": "0.1.0"}}, REPOSITORY)
+        result = prepare_request(self.root, "workflow_dispatch", {"inputs": {"version": "0.1.0"}}, REPOSITORY, [])
         self.assertEqual(result, ("0.1.0", "0.1.0"))
 
     def test_merge_with_wrong_version_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "merged release PR"):
-            prepare_request(self.root, "pull_request", MERGED_PR, REPOSITORY)
+            prepare_request(self.root, "pull_request", MERGED_PR, REPOSITORY, RELEASES)
         self.assertEqual((self.root / "Cargo.toml").read_text(), MANIFEST)
 
     def test_merge_with_matching_version_is_valid(self):
         (self.root / "Cargo.toml").write_text(MANIFEST.replace("0.1.0", "0.2.0"))
         (self.root / "Cargo.lock").write_text(LOCK.replace("0.1.0", "0.2.0"))
-        self.assertEqual(prepare_request(self.root, "pull_request", MERGED_PR, REPOSITORY), ("0.2.0", "0.2.0"))
+        self.assertEqual(prepare_request(self.root, "pull_request", MERGED_PR, REPOSITORY, RELEASES), ("0.2.0", "0.2.0"))
 
 
 class ProtectedWorkflowTests(unittest.TestCase):
